@@ -1,0 +1,33 @@
+Thank you for installing {{ .Chart.Name }} version {{ .Chart.Version }}.
+
+Your NGINX deployment has been successfully created!
+
+Release Name: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+To access your NGINX server:
+
+{{- if .Values.ingress.enabled }}
+1. Via Ingress:
+   {{- range .Values.ingress.hosts }}
+   - https://{{ .host }}
+   {{- end }}
+{{- else }}
+1. Via Port Forward:
+   kubectl port-forward svc/{{ include "nginx-chart.fullname" . }} 8080:80 -n {{ .Release.Namespace }}
+   Then visit: http://localhost:8080
+{{- end }}
+
+2. Get the service details:
+   kubectl get svc {{ include "nginx-chart.fullname" . }} -n {{ .Release.Namespace }}
+
+3. Check pod status:
+   kubectl get pods -l "app.kubernetes.io/name={{ include "nginx-chart.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -n {{ .Release.Namespace }}
+
+4. View logs:
+   kubectl logs -l "app.kubernetes.io/name={{ include "nginx-chart.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -n {{ .Release.Namespace }}
+
+Configuration Summary:
+- Replicas: {{ .Values.replicaCount }}
+- Image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+- Ingress Enabled: {{ .Values.ingress.enabled }}

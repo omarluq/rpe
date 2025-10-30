@@ -1,0 +1,98 @@
+name: Deploy to EKS Staging
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "k8s/nginx-chart/**"
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: staging-eks-cluster
+  HELM_CHART_PATH: ./k8s/nginx-chart
+  NAMESPACE: nginx-staging
+  RELEASE_NAME: nginx-staging
+
+permissions:
+  id-token: write # Required for OIDC authentication
+  contents: read # Required to checkout code
+
+jobs:
+  deploy:
+    name: Deploy Helm Chart to EKS
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v5.1.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-actions-eks-deployment
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS identity
+        run: |
+          aws sts get-caller-identity
+          echo "Successfully authenticated via OIDC"
+
+      - name: Configure kubectl for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER_NAME }}
+
+      - name: Verify cluster access
+        run: |
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Set up Helm
+        # will use the action default helm version v3.18.3
+        uses: azure/setup-helm@v4.3.0
+
+      - name: Lint Helm chart
+        run: |
+          helm lint ${{ env.HELM_CHART_PATH }}
+
+      - name: Create namespace if not exists
+        run: |
+          kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy Helm chart to staging
+        run: |
+          helm upgrade --install ${{ env.RELEASE_NAME }} ${{ env.HELM_CHART_PATH }} \
+            --namespace ${{ env.NAMESPACE }} \
+            --set ingress.hosts[0].host=staging.example.com \
+            --set ingress.tls[0].hosts[0]=staging.example.com \
+            --set ingress.tls[0].secretName=nginx-staging-tls \
+            --set replicaCount=2 \
+            --wait \
+            --timeout 5m
+
+      - name: Verify deployment
+        run: |
+          kubectl get all -n ${{ env.NAMESPACE }}
+          kubectl rollout status deployment/${{ env.RELEASE_NAME }}-nginx-chart -n ${{ env.NAMESPACE }} --timeout=5m
+
+      - name: Run Helm tests
+        run: |
+          helm test ${{ env.RELEASE_NAME }} -n ${{ env.NAMESPACE }} --logs
+
+      - name: Get deployment status
+        if: always()
+        run: |
+          echo "=== Deployment Summary ==="
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app.kubernetes.io/instance=${{ env.RELEASE_NAME }}
+          kubectl get ingress -n ${{ env.NAMESPACE }}
+          helm status ${{ env.RELEASE_NAME }} -n ${{ env.NAMESPACE }}
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Deployment failed! Check the logs above for details."
+          kubectl get events -n ${{ env.NAMESPACE }} --sort-by='.lastTimestamp' | tail -20
